@@ -19,6 +19,9 @@ use crate::ntlm::{
 use crate::xml::{create_event, extract_found_calendars, search_for_calendars};
 
 
+const USER_AGENT: &str = "exchcalfill";
+
+
 async fn initial_auth(config: &Config) -> Client {
     let password = read_password_from_tty(Some("PASSWORD? "))
         .expect("failed to read password");
@@ -43,6 +46,7 @@ async fn initial_auth(config: &Config) -> Client {
     // attempt to connect to the server, offering the negotiation header
     let client = Client::builder()
         .cookie_store(true)
+        .user_agent(USER_AGENT)
         .build()
         .expect("failed to build client");
     let resp = client.get(&config.ews_url)
