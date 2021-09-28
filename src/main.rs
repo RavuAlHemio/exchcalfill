@@ -186,6 +186,15 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
         // otherwise, ask again
     }
 
+    let start_local = match get_time(&date, "Start time") {
+        None => return true,
+        Some(dt) => dt,
+    };
+    let end_local = match get_time(&date, "End time") {
+        None => return true,
+        Some(dt) => dt,
+    };
+
     println!("> Event name?");
     let name = read_stdin_line_trimmed();
 
@@ -195,15 +204,6 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
         Some(location_line)
     } else {
         None
-    };
-
-    let start_local = match get_time(&date, "Start time") {
-        None => return true,
-        Some(dt) => dt,
-    };
-    let end_local = match get_time(&date, "End time") {
-        None => return true,
-        Some(dt) => dt,
     };
 
     let start = start_local.with_timezone(&Utc);
