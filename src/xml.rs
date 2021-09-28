@@ -306,3 +306,39 @@ pub(crate) fn create_event(event: &NewEvent, folder_id: &FolderId) -> Vec<u8> {
         .expect("failed to serialize XML");
     buf
 }
+
+pub(crate) fn extract_success(xml_bytes: Vec<u8>) {
+    let xml_string = String::from_utf8(xml_bytes)
+        .expect("failed to decode XML als UTF-8");
+    let xml_package = parser::parse(&xml_string)
+        .expect("failed to parse XML");
+    let doc = xml_package.as_document();
+
+    let mut xpath_ctx = Context::new();
+    xpath_ctx.set_namespace("soap", SOAP_NS_URI);
+    xpath_ctx.set_namespace("t", EXCHANGE_TYPES_NS_URI);
+    xpath_ctx.set_namespace("m", EXCHANGE_MESSAGES_NS_URI);
+
+    let xpath_factory = Factory::new();
+
+    let response_xpath = xpath_factory.gimme_xpath("/soap:Envelope/soap:Body/m:CreateItemResponse/m:ResponseMessages/m:CreateItemResponseMessage");
+    let response_code_xpath = xpath_factory.gimme_xpath("./m:ResponseCode/text()");
+
+    let response_nodes = response_xpath.evaluate_nodeset(&xpath_ctx, doc.root());
+    for response_node in response_nodes {
+        let resp_class_elem = match response_node.element() {
+            Some(e) => e,
+            None => continue,
+        };
+        let resp_class_text = resp_class_elem
+            .attribute_value("ResponseClass").expect("no ResponseClass attribute");
+        let resp_code_text = response_code_xpath.evaluate_text(&xpath_ctx, response_node);
+
+        if resp_class_text != "Success" || resp_code_text != "NoError" {
+            println!("response class: {}, response code: {}", resp_class_text, resp_code_text);
+            println!("{}", xml_string);
+        }
+
+        return;
+    }
+}

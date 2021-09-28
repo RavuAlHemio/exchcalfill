@@ -16,7 +16,7 @@ use crate::ntlm::{
     NtlmCredentials, NtlmFlags, NtlmMessage, NtlmNegotiateMessage, get_ntlm_time,
     respond_challenge_ntlm_v2,
 };
-use crate::xml::{create_event, extract_found_calendars, search_for_calendars};
+use crate::xml::{create_event, extract_found_calendars, extract_success, search_for_calendars};
 
 
 const USER_AGENT: &str = "exchcalfill";
@@ -225,9 +225,7 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
     let add_bytes = add_response
         .bytes().await.expect("failed to obtain addition response bytes")
         .to_vec();
-    let add_str = String::from_utf8(add_bytes)
-        .expect("failed to stringify addition response");
-    println!("{}", add_str);
+    extract_success(add_bytes);
 
     true
 }
