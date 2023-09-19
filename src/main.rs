@@ -4,6 +4,7 @@ mod xml;
 
 
 use std::io::stdin;
+use std::sync::Arc;
 
 use base64::prelude::{BASE64_STANDARD, Engine};
 use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
@@ -42,8 +43,23 @@ async fn initial_auth(config: &Config) -> Client {
         .expect("failed to encode NTLM negotiation message");
     let nego_b64 = BASE64_STANDARD.encode(&nego_msg_bytes);
 
+    // prepare TLS config with key logging
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_trust_anchors(
+        webpki_roots::TLS_SERVER_ROOTS.iter()
+            .map(|ta| rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject, ta.spki, ta.name_constraints,
+            ))
+    );
+    let mut tls_config = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
+
     // attempt to connect to the server, offering the negotiation header
     let client = Client::builder()
+        .use_preconfigured_tls(tls_config)
         .cookie_store(true)
         .user_agent(USER_AGENT)
         .build()
@@ -259,6 +275,8 @@ async fn interaction_loop(mut client: Client, config: &Config, calendar_folder: 
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     // load config
     let config: Config = {
         let config_string = std::fs::read_to_string("config.toml")

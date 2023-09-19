@@ -10,15 +10,19 @@ chrono = { version = "0.4" }
 cipher = { version = "0.4" }
 des = { version = "0.8" }
 digest = { version = "0.10" }
+env_logger = { version = "0.10" }
 hmac = { version = "0.12" }
 local-encoding = { version = "0.2" }
 md4 = { version = "0.10" }
 md-5 = { version = "0.10" }
 rand = { version = "0.8" }
-reqwest = { version = "0.11", features = ["cookies"] }
+reqwest = { version = "0.11", features = ["cookies", "rustls-tls"] }
 rpassword = { version = "7.2" }
-serde = { version = "1.0" }
+rustls = { version = "0.21" }
+serde = { version = "1.0", features = ["derive"] }
 sxd-document = { version = "0.3.2" }
 sxd-xpath = { version = "0.4" }
 tokio = { version = "1.32", features = ["full"] }
 toml = { version = "0.8" }
+webpki = { version = "0.22" }
+webpki-roots = { version = "0.25" }
