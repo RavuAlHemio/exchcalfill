@@ -3,13 +3,12 @@ mod ntlm;
 mod xml;
 
 
-use std::fs::File;
-use std::io::{Read, stdin};
+use std::io::stdin;
 
-use base64;
+use base64::prelude::{BASE64_STANDARD, Engine};
 use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
 use reqwest::Client;
-use rpassword::read_password_from_tty;
+use rpassword::prompt_password;
 
 use crate::model::{Config, FolderId, NewEvent};
 use crate::ntlm::{
@@ -23,7 +22,7 @@ const USER_AGENT: &str = "exchcalfill";
 
 
 async fn initial_auth(config: &Config) -> Client {
-    let password = read_password_from_tty(Some("PASSWORD? "))
+    let password = prompt_password("PASSWORD? ")
         .expect("failed to read password");
 
     // negotiate NTLM
@@ -41,7 +40,7 @@ async fn initial_auth(config: &Config) -> Client {
     });
     let nego_msg_bytes = nego_msg.to_bytes()
         .expect("failed to encode NTLM negotiation message");
-    let nego_b64 = base64::encode(&nego_msg_bytes);
+    let nego_b64 = BASE64_STANDARD.encode(&nego_msg_bytes);
 
     // attempt to connect to the server, offering the negotiation header
     let client = Client::builder()
@@ -60,7 +59,7 @@ async fn initial_auth(config: &Config) -> Client {
         .expect("challenge header not a string")
         .split(" ")
         .nth(1).expect("second chunk of challenge header missing");
-    let challenge_bytes = base64::decode(&challenge_b64)
+    let challenge_bytes = BASE64_STANDARD.decode(challenge_b64)
         .expect("base64 decoding challenge message failed");
     let challenge = NtlmMessage::try_from(challenge_bytes.as_slice())
         .expect("decoding challenge message failed");
@@ -99,7 +98,7 @@ async fn initial_auth(config: &Config) -> Client {
     );
     let auth_msg_bytes = auth_msg.to_bytes()
         .expect("failed to encode NTLM authentication message");
-    let auth_b64 = base64::encode(&auth_msg_bytes);
+    let auth_b64 = BASE64_STANDARD.encode(&auth_msg_bytes);
 
     client.get(&config.ews_url)
         .header("Authorization", format!("NTLM {}", auth_b64))
@@ -262,12 +261,9 @@ async fn interaction_loop(mut client: Client, config: &Config, calendar_folder: 
 async fn main() {
     // load config
     let config: Config = {
-        let mut f = File::open("config.toml")
-            .expect("failed to open config.toml");
-        let mut config_bytes = Vec::new();
-        f.read_to_end(&mut config_bytes)
+        let config_string = std::fs::read_to_string("config.toml")
             .expect("failed to read config.toml");
-        toml::from_slice(&config_bytes)
+        toml::from_str(&config_string)
             .expect("failed to parse config.toml")
     };
 

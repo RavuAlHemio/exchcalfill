@@ -2,12 +2,12 @@ use std::fmt;
 
 use bitflags::bitflags;
 use chrono::{TimeZone, Utc};
-use cipher::{BlockEncrypt, NewBlockCipher};
+use cipher::{BlockEncrypt, KeyInit};
 use cipher::generic_array::GenericArray;
 use cipher::generic_array::typenum::U8;
 use des::Des;
 use digest::Digest;
-use hmac::{Hmac, Mac, NewMac};
+use hmac::{Hmac, Mac};
 use local_encoding::{Encoder, Encoding};
 use md4::Md4;
 use md5::Md5;
@@ -34,6 +34,7 @@ pub struct ChallengeResponse {
 
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, Default, Hash, Eq, Ord, PartialEq, PartialOrd)]
     pub struct NtlmFlags: u32 {
         const NEGOTIATE_UNICODE = 0x0000_0001;
         const NEGOTIATE_OEM = 0x0000_0002;
@@ -858,7 +859,7 @@ pub fn ntlm_v1_password_func(password: &str) -> [u8; 16] {
     let password_bytes: Vec<u8> = password.encode_utf16()
         .flat_map(|p| p.to_le_bytes())
         .collect();
-    let mut md4_state = Md4::new();
+    let mut md4_state = <Md4 as Digest>::new();
     md4_state.update(&password_bytes);
     md4_state.finalize().as_slice().try_into().unwrap()
 }
@@ -866,7 +867,7 @@ pub fn ntlm_v1_password_func(password: &str) -> [u8; 16] {
 pub fn ntlm_v2_password_func(creds: &NtlmCredentials) -> [u8; 16] {
     // the HMAC key func is the same as the NTLMv1 password func
     let hmac_key = ntlm_v1_password_func(&creds.password);
-    let mut hmac_md5: Hmac<Md5> = Hmac::new_from_slice(&hmac_key).unwrap();
+    let mut hmac_md5: Hmac<Md5> = <Hmac<Md5> as Mac>::new_from_slice(&hmac_key).unwrap();
 
     let upper_user_bytes: Vec<u8> = creds.username
         .to_uppercase()
@@ -893,7 +894,7 @@ pub fn respond_challenge_ntlm_v1(server_challenge: [u8; 8], creds: &NtlmCredenti
     let lm_response = Vec::from(des_long(lm_key, server_challenge));
 
     let session_key = {
-        let mut md4 = Md4::new();
+        let mut md4 = <Md4 as Digest>::new();
         md4.update(&ntlm_key);
         Vec::from(md4.finalize().as_slice())
     };
@@ -912,7 +913,7 @@ pub fn respond_challenge_ntlm_v1_no_lm(server_challenge: [u8; 8], creds: &NtlmCr
     let lm_response = ntlm_response.clone();
 
     let session_key = {
-        let mut md4 = Md4::new();
+        let mut md4 = <Md4 as Digest>::new();
         md4.update(&ntlm_key);
         Vec::from(md4.finalize().as_slice())
     };
@@ -931,7 +932,7 @@ pub fn respond_challenge_ntlm_v1_extended(server_challenge: [u8; 8], creds: &Ntl
     let ntlm_key = ntlm_v1_password_func(&creds.password);
 
     let desl_plaintext: [u8; 8] = {
-        let mut md5 = Md5::new();
+        let mut md5 = <Md5 as Digest>::new();
         md5.update(server_challenge);
         md5.update(client_challenge);
         let digest = md5.finalize();
@@ -949,7 +950,7 @@ pub fn respond_challenge_ntlm_v1_extended(server_challenge: [u8; 8], creds: &Ntl
     }
 
     let session_key = {
-        let mut md4 = Md4::new();
+        let mut md4 = <Md4 as Digest>::new();
         md4.update(&ntlm_key);
         Vec::from(md4.finalize().as_slice())
     };
@@ -978,7 +979,7 @@ pub fn respond_challenge_ntlm_v2(server_challenge: [u8; 8], target_info: &[u8], 
     let ntlm_key = ntlm_v2_password_func(&creds);
 
     let nt_proof_string = {
-        let mut hmac_md5: Hmac<Md5> = Hmac::new_from_slice(&ntlm_key).unwrap();
+        let mut hmac_md5: Hmac<Md5> = <Hmac<Md5> as Mac>::new_from_slice(&ntlm_key).unwrap();
         hmac_md5.update(&server_challenge);
         hmac_md5.update(&temp);
 
@@ -993,7 +994,7 @@ pub fn respond_challenge_ntlm_v2(server_challenge: [u8; 8], target_info: &[u8], 
 
     let mut lm_response = Vec::with_capacity(16 + 8);
     {
-        let mut hmac_md5: Hmac<Md5> = Hmac::new_from_slice(&ntlm_key).unwrap();
+        let mut hmac_md5: Hmac<Md5> = <Hmac<Md5> as Mac>::new_from_slice(&ntlm_key).unwrap();
         hmac_md5.update(&server_challenge);
         hmac_md5.update(&client_challenge);
         lm_response.extend_from_slice(hmac_md5.finalize().into_bytes().as_slice());
@@ -1001,7 +1002,7 @@ pub fn respond_challenge_ntlm_v2(server_challenge: [u8; 8], target_info: &[u8], 
     lm_response.extend_from_slice(&client_challenge);
 
     let session_key = {
-        let mut hmac_md5: Hmac<Md5> = Hmac::new_from_slice(&ntlm_key).unwrap();
+        let mut hmac_md5: Hmac<Md5> = <Hmac<Md5> as Mac>::new_from_slice(&ntlm_key).unwrap();
         hmac_md5.update(&nt_proof_string);
         Vec::from(hmac_md5.finalize().into_bytes().as_slice())
     };

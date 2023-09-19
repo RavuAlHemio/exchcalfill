@@ -4,21 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-base64 = { version = "0.13" }
-bitflags = { version = "1.3" }
+base64 = { version = "0.21" }
+bitflags = { version = "2.4" }
 chrono = { version = "0.4" }
-cipher = { version = "0.3" }
-des = { version = "0.7" }
-digest = { version = "0.9" }
-hmac = { version = "0.11" }
+cipher = { version = "0.4" }
+des = { version = "0.8" }
+digest = { version = "0.10" }
+hmac = { version = "0.12" }
 local-encoding = { version = "0.2" }
-md4 = { version = "0.9" }
-md-5 = { version = "0.9" }
+md4 = { version = "0.10" }
+md-5 = { version = "0.10" }
 rand = { version = "0.8" }
 reqwest = { version = "0.11", features = ["cookies"] }
-rpassword = { version = "5.0" }
+rpassword = { version = "7.2" }
 serde = { version = "1.0" }
 sxd-document = { version = "0.3.2" }
 sxd-xpath = { version = "0.4" }
-tokio = { version = "1.11", features = ["full"] }
-toml = { version = "0.5" }
+tokio = { version = "1.32", features = ["full"] }
+toml = { version = "0.8" }
