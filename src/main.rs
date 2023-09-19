@@ -1,5 +1,4 @@
 mod model;
-mod ntlm;
 mod xml;
 
 
@@ -8,14 +7,11 @@ use std::sync::Arc;
 
 use base64::prelude::{BASE64_STANDARD, Engine};
 use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
+use ntlmclient;
 use reqwest::Client;
 use rpassword::prompt_password;
 
 use crate::model::{Config, FolderId, NewEvent};
-use crate::ntlm::{
-    NtlmCredentials, NtlmFlags, NtlmMessage, NtlmNegotiateMessage, get_ntlm_time,
-    respond_challenge_ntlm_v2,
-};
 use crate::xml::{create_event, extract_found_calendars, extract_success, search_for_calendars};
 
 
@@ -28,12 +24,12 @@ async fn initial_auth(config: &Config) -> Client {
 
     // negotiate NTLM
     let nego_flags
-        = NtlmFlags::NEGOTIATE_UNICODE
-        | NtlmFlags::REQUEST_TARGET
-        | NtlmFlags::NEGOTIATE_NTLM
-        | NtlmFlags::NEGOTIATE_WORKSTATION_SUPPLIED
+        = ntlmclient::Flags::NEGOTIATE_UNICODE
+        | ntlmclient::Flags::REQUEST_TARGET
+        | ntlmclient::Flags::NEGOTIATE_NTLM
+        | ntlmclient::Flags::NEGOTIATE_WORKSTATION_SUPPLIED
         ;
-    let nego_msg = NtlmMessage::Negotiate(NtlmNegotiateMessage {
+    let nego_msg = ntlmclient::Message::Negotiate(ntlmclient::NegotiateMessage {
         flags: nego_flags,
         supplied_domain: String::new(),
         supplied_workstation: config.local_hostname.clone(),
@@ -77,10 +73,10 @@ async fn initial_auth(config: &Config) -> Client {
         .nth(1).expect("second chunk of challenge header missing");
     let challenge_bytes = BASE64_STANDARD.decode(challenge_b64)
         .expect("base64 decoding challenge message failed");
-    let challenge = NtlmMessage::try_from(challenge_bytes.as_slice())
+    let challenge = ntlmclient::Message::try_from(challenge_bytes.as_slice())
         .expect("decoding challenge message failed");
     let challenge_content = match challenge {
-        NtlmMessage::Challenge(c) => c,
+        ntlmclient::Message::Challenge(c) => c,
         other => panic!("wrong challenge message: {:?}", other),
     };
 
@@ -90,22 +86,22 @@ async fn initial_auth(config: &Config) -> Client {
         .collect();
 
     // calculate the response
-    let creds = NtlmCredentials {
+    let creds = ntlmclient::Credentials {
         username: config.username.clone(),
         password,
         domain: config.domain.clone(),
     };
-    let challenge_response = respond_challenge_ntlm_v2(
+    let challenge_response = ntlmclient::respond_challenge_ntlm_v2(
         challenge_content.challenge,
         &target_info_bytes,
-        get_ntlm_time(),
+        ntlmclient::get_ntlm_time(),
         &creds,
     );
  
     // assemble the packet
     let auth_flags
-        = NtlmFlags::NEGOTIATE_UNICODE
-        | NtlmFlags::NEGOTIATE_NTLM
+        = ntlmclient::Flags::NEGOTIATE_UNICODE
+        | ntlmclient::Flags::NEGOTIATE_NTLM
         ;
     let auth_msg = challenge_response.to_message(
         &creds,
