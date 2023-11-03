@@ -15,7 +15,7 @@ rustls = { version = "0.21" }
 serde = { version = "1.0", features = ["derive"] }
 sxd-document = { version = "0.3.2" }
 sxd-xpath = { version = "0.4" }
-tokio = { version = "1.32", features = ["full"] }
+tokio = { version = "1.33", features = ["full"] }
 toml = { version = "0.8" }
 webpki = { version = "0.22" }
 webpki-roots = { version = "0.25" }
