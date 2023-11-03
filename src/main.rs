@@ -6,13 +6,22 @@ use std::io::stdin;
 use std::sync::Arc;
 
 use base64::prelude::{BASE64_STANDARD, Engine};
-use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Days, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use ntlmclient;
 use reqwest::Client;
 use rpassword::prompt_password;
 
 use crate::model::{Config, FolderId, NewEvent};
 use crate::xml::{create_event, extract_found_calendars, extract_success, search_for_calendars};
+
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum TimeResult {
+    Time(DateTime<Utc>),
+    InputAgain,
+    GiveUp,
+}
 
 
 const USER_AGENT: &str = "exchcalfill";
@@ -142,42 +151,80 @@ fn read_stdin_line_trimmed() -> String {
     line.trim().to_owned()
 }
 
-fn get_time(date: &NaiveDate, time_kind: &str) -> Option<DateTime<Local>> {
+fn get_time_assuming_timezone<T: TimeZone>(date: &NaiveDate, time: &NaiveTime, tz: &T) -> TimeResult {
+    let local_time = match tz.from_local_datetime(&date.and_time(*time)) {
+        LocalResult::None => {
+            println!("> no such time; try again");
+            return TimeResult::InputAgain;
+        },
+        LocalResult::Ambiguous(first_time, second_time) => {
+            loop {
+                println!("> this time happens twice; 1st or 2nd occurrence? [12] (or \"nvm\" to give up)");
+                let pick_line = read_stdin_line_trimmed();
+                if pick_line == "nvm" {
+                    return TimeResult::GiveUp;
+                } else if pick_line == "1" {
+                    break first_time;
+                } else if pick_line == "2" {
+                    break second_time;
+                }
+                // otherwise, ask again
+            }
+        },
+        LocalResult::Single(dt) => dt,
+    };
+    TimeResult::Time(local_time.with_timezone(&Utc))
+}
+
+fn get_time(date: &NaiveDate, time_kind: &str) -> Option<DateTime<Utc>> {
+    let mut timezone: Option<Tz> = None;
     loop {
-        println!("> {}? [hhmm] (or \"nvm\" to give up)", time_kind);
+        let timezone_name = timezone.map(|tz| tz.name()).unwrap_or("local time");
+        println!("> {} in {}? [hhmm] (or \"tz\" to set timezone or \"nvm\" to give up)", time_kind, timezone_name);
         let time_line = read_stdin_line_trimmed();
         if time_line == "nvm" {
             return None;
+        } else if time_line == "tz" {
+            loop {
+                println!("> IANA timezone (or empty for local time)?");
+                let timezone_line = read_stdin_line_trimmed();
+                if timezone_line.len() == 0 {
+                    timezone = None;
+                    break;
+                }
+                let mut tz_found = false;
+                for tz in chrono_tz::TZ_VARIANTS {
+                    if tz.name() == &timezone_line {
+                        timezone = Some(tz);
+                        tz_found = true;
+                        break;
+                    }
+                }
+                if tz_found {
+                    break;
+                } else {
+                    println!("unknown timezone");
+                }
+            }
+            continue;
         }
         let t = match NaiveTime::parse_from_str(&time_line, "%H%M") {
             Ok(v) => v,
             Err(e) => {
                 println!("> failed to parse: {}", e);
                 continue;
-            }
-        };
-        let dt = match Local.from_local_datetime(&date.and_time(t)) {
-            LocalResult::None => {
-                println!("> no such time; try again");
-                continue;
             },
-            LocalResult::Ambiguous(first_time, second_time) => {
-                loop {
-                    println!("> this time happens twice; 1st or 2nd occurrence? [12] (or \"nvm\" to give up)");
-                    let pick_line = read_stdin_line_trimmed();
-                    if pick_line == "nvm" {
-                        return None;
-                    } else if pick_line == "1" {
-                        break first_time;
-                    } else if pick_line == "2" {
-                        break second_time;
-                    }
-                    // otherwise, ask again
-                }
-            },
-            LocalResult::Single(dt) => dt,
         };
-        return Some(dt);
+        let dt_result = if let Some(tz) = timezone {
+            get_time_assuming_timezone(date, &t, &tz)
+        } else {
+            get_time_assuming_timezone(date, &t, &Local)
+        };
+        match dt_result {
+            TimeResult::Time(dt) => return Some(dt),
+            TimeResult::GiveUp => return None,
+            TimeResult::InputAgain => {}, // loop again
+        }
     }
 }
 
@@ -197,14 +244,18 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
         // otherwise, ask again
     }
 
-    let start_local = match get_time(&date, "Start time") {
+    let start = match get_time(&date, "Start time") {
         None => return true,
         Some(dt) => dt,
     };
-    let end_local = match get_time(&date, "End time") {
+    let mut end = match get_time(&date, "End time") {
         None => return true,
         Some(dt) => dt,
     };
+    if end < start {
+        println!("Warning: end time before start time; increasing end date");
+        end = end.checked_add_days(Days::new(1)).unwrap();
+    }
 
     println!("> Event name?");
     let name = read_stdin_line_trimmed();
@@ -216,9 +267,6 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
     } else {
         None
     };
-
-    let start = start_local.with_timezone(&Utc);
-    let end = end_local.with_timezone(&Utc);
 
     let new_event = NewEvent::new(
         start,
