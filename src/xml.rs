@@ -296,7 +296,7 @@ pub(crate) fn create_event(event: &NewEvent, folder_id: &FolderId) -> Vec<u8> {
     calendar_item.append_child(is_all_day);
 
     let legacy_free_busy = create_event.create_element("t:LegacyFreeBusyStatus");
-    legacy_free_busy.set_text("Busy");
+    legacy_free_busy.set_text(event.free_busy_status.as_exchange_str());
     calendar_item.append_child(legacy_free_busy);
 
     let mut buf = Vec::new();

@@ -12,7 +12,7 @@ use ntlmclient;
 use reqwest::Client;
 use rpassword::prompt_password;
 
-use crate::model::{Config, FolderId, NewEvent};
+use crate::model::{Config, FolderId, FreeBusyStatus, NewEvent};
 use crate::xml::{create_event, extract_found_calendars, extract_success, search_for_calendars};
 
 
@@ -229,8 +229,9 @@ fn get_time(date: &NaiveDate, time_kind: &str) -> Option<DateTime<Utc>> {
 }
 
 async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &FolderId, date: &NaiveDate) -> bool {
+    let mut ask_free_busy_state = false;
     loop {
-        println!("> Add an event on {}? [yn]", date.format("%Y-%m-%d"));
+        println!("> Add an event on {}? [ynf]", date.format("%Y-%m-%d"));
         let add_line = read_stdin_line_trimmed();
 
         if add_line == "y" {
@@ -239,6 +240,10 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
         } else if add_line == "n" {
             // exit the app
             return false;
+        } else if add_line == "f" {
+            // user wants to add a special free-busy state
+            ask_free_busy_state = true;
+            break;
         }
 
         // otherwise, ask again
@@ -268,11 +273,31 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
         None
     };
 
+    let free_busy_state = if ask_free_busy_state {
+        loop {
+            println!("> Free/busy state? [f=free, b=busy, t=tentative, o=out-of-office, e=elsewhere, n=no-data, q=quit]");
+            let fbs_line = read_stdin_line_trimmed();
+            match fbs_line.as_str() {
+                "f" => break FreeBusyStatus::Free,
+                "b" => break FreeBusyStatus::Busy,
+                "t" => break FreeBusyStatus::Tentative,
+                "o" => break FreeBusyStatus::OutOfOffice,
+                "e" => break FreeBusyStatus::WorkingElsewhere,
+                "n" => break FreeBusyStatus::NoData,
+                "q" => return true,
+                _ => {},
+            }
+        }
+    } else {
+        FreeBusyStatus::Busy
+    };
+
     let new_event = NewEvent::new(
         start,
         end,
         name,
         location,
+        Some(free_busy_state),
     );
 
     // add this event
