@@ -49,15 +49,13 @@ async fn initial_auth(config: &Config) -> Client {
     let nego_b64 = BASE64_STANDARD.encode(&nego_msg_bytes);
 
     // prepare TLS config with key logging
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add_trust_anchors(
+    let roots = rustls::RootCertStore::from_iter(
         webpki_roots::TLS_SERVER_ROOTS.iter()
-            .map(|ta| rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject, ta.spki, ta.name_constraints,
-            ))
+            .cloned()
     );
-    let mut tls_config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
+    let mut tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+        .with_safe_default_protocol_versions()
+        .expect("failed to prepare TLS client config")
         .with_root_certificates(roots)
         .with_no_client_auth();
     tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
