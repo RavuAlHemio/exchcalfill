@@ -1159,9 +1159,9 @@ dependencies = [
 
 [[package]]
 name = "ntlmclient"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e90e3a65288511680b1fb8e22a32dea801bfdf606d0ea0501e61ed40e7708000"
+checksum = "05cc3c6b6bf0c15ed05e39c311f3e03cdddc63df971685e075c73a6d6610fc12"
 dependencies = [
  "bitflags",
  "chrono",
@@ -1711,9 +1711,9 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "schannel"
-version = "0.1.26"
+version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01227be5826fa0690321a2ba6c5cd57a19cf3f6a09e76973b58e61de6ab9d1c1"
+checksum = "1f29ebaa345f945cec9fbbc532eb307f0fdad8161f281b6369539c8d84876b3d"
 dependencies = [
  "windows-sys 0.59.0",
 ]
@@ -2354,21 +2354,12 @@ dependencies = [
 
 [[package]]
 name = "windows"
-version = "0.51.1"
+version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca229916c5ee38c2f2bc1e9d8f04df975b4bd93f9955dc69fabb5d91270045c9"
+checksum = "dd04d41d93c4992d421894c18c8b43496aa748dd4c081bac0dc93eb0489272b6"
 dependencies = [
- "windows-core 0.51.1",
- "windows-targets 0.48.5",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.51.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1f8cf84f35d2db49a46868f947758c7a1138116f7fac3bc844f43ade1292e64"
-dependencies = [
- "windows-targets 0.48.5",
+ "windows-core 0.58.0",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -2378,6 +2369,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33ab640c8d7e35bf8ba19b884ba838ceb4fba93a4e8c65a9059d08afcfc683d9"
 dependencies = [
  "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-core"
+version = "0.58.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ba6d44ec8c2591c134257ce647b7ea6b20335bf6379a27dac5f1641fcf59f99"
+dependencies = [
+ "windows-implement",
+ "windows-interface",
+ "windows-result",
+ "windows-strings",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-implement"
+version = "0.58.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bbd5b46c938e506ecbce286b6628a02171d56153ba733b6c741fc627ec9579b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.58.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "053c4c462dc91d3b1504c6fe5a726dd15e216ba718e84a0e46a88fbe5ded3515"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
