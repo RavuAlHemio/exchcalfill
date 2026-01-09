@@ -3,16 +3,13 @@ mod xml;
 
 
 use std::io::stdin;
-use std::sync::Arc;
 
-use base64::prelude::{BASE64_STANDARD, Engine};
 use chrono::{DateTime, Days, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
-use ntlmclient;
+use msswap::ExchangeConfig;
 use reqwest::Client;
-use rpassword::prompt_password;
 
-use crate::model::{Config, FolderId, FreeBusyStatus, NewEvent};
+use crate::model::{FolderId, FreeBusyStatus, NewEvent};
 use crate::xml::{create_event, extract_found_calendars, extract_success, search_for_calendars};
 
 
@@ -23,118 +20,6 @@ enum TimeResult {
     GiveUp,
 }
 
-
-const USER_AGENT: &str = "exchcalfill";
-
-
-async fn initial_auth(config: &Config) -> Client {
-    let password = prompt_password("PASSWORD? ")
-        .expect("failed to read password");
-
-    // negotiate NTLM
-    let nego_flags
-        = ntlmclient::Flags::NEGOTIATE_UNICODE
-        | ntlmclient::Flags::REQUEST_TARGET
-        | ntlmclient::Flags::NEGOTIATE_NTLM
-        | ntlmclient::Flags::NEGOTIATE_WORKSTATION_SUPPLIED
-        ;
-    let nego_msg = ntlmclient::Message::Negotiate(ntlmclient::NegotiateMessage {
-        flags: nego_flags,
-        supplied_domain: String::new(),
-        supplied_workstation: config.local_hostname.clone(),
-        os_version: Default::default(),
-    });
-    let nego_msg_bytes = nego_msg.to_bytes()
-        .expect("failed to encode NTLM negotiation message");
-    let nego_b64 = BASE64_STANDARD.encode(&nego_msg_bytes);
-
-    // prepare TLS config with key logging
-    let roots = rustls::RootCertStore::from_iter(
-        webpki_roots::TLS_SERVER_ROOTS.iter()
-            .cloned()
-    );
-    let mut tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
-        .with_safe_default_protocol_versions()
-        .expect("failed to prepare TLS client config")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-
-    // attempt to connect to the server, offering the negotiation header
-    let client = Client::builder()
-        .use_preconfigured_tls(tls_config)
-        .cookie_store(true)
-        .user_agent(USER_AGENT)
-        .build()
-        .expect("failed to build client");
-    let resp = client.get(&config.ews_url)
-        .header("Authorization", format!("NTLM {}", nego_b64))
-        .send().await
-        .expect("failed to send challenge request to Exchange");
-    let challenge_header = resp.headers().get("www-authenticate")
-        .expect("response missing challenge header");
-
-    let challenge_b64 = challenge_header.to_str()
-        .expect("challenge header not a string")
-        .split(" ")
-        .nth(1).expect("second chunk of challenge header missing");
-    let challenge_bytes = BASE64_STANDARD.decode(challenge_b64)
-        .expect("base64 decoding challenge message failed");
-    let challenge = ntlmclient::Message::try_from(challenge_bytes.as_slice())
-        .expect("decoding challenge message failed");
-    let challenge_content = match challenge {
-        ntlmclient::Message::Challenge(c) => c,
-        other => panic!("wrong challenge message: {:?}", other),
-    };
-
-    let target_info_bytes: Vec<u8> = challenge_content.target_information
-        .iter()
-        .flat_map(|ie| ie.to_bytes())
-        .collect();
-
-    // calculate the response
-    let creds = ntlmclient::Credentials {
-        username: config.username.clone(),
-        password,
-        domain: config.domain.clone(),
-    };
-    let challenge_response = ntlmclient::respond_challenge_ntlm_v2(
-        challenge_content.challenge,
-        &target_info_bytes,
-        ntlmclient::get_ntlm_time(),
-        &creds,
-    );
- 
-    // assemble the packet
-    let auth_flags
-        = ntlmclient::Flags::NEGOTIATE_UNICODE
-        | ntlmclient::Flags::NEGOTIATE_NTLM
-        ;
-    let auth_msg = challenge_response.to_message(
-        &creds,
-        &config.local_hostname,
-        auth_flags,
-    );
-    let auth_msg_bytes = auth_msg.to_bytes()
-        .expect("failed to encode NTLM authentication message");
-    let auth_b64 = BASE64_STANDARD.encode(&auth_msg_bytes);
-
-    client.get(&config.ews_url)
-        .header("Authorization", format!("NTLM {}", auth_b64))
-        .send().await
-        .expect("failed to send authentication request to Exchange")
-        .error_for_status()
-        .expect("error response to authentication message");
-
-    // try calling again, without the auth stuff (thanks to cookies)
-    client.get(&config.ews_url)
-        .send().await
-        .expect("failed to send refresher request to Exchange")
-        .error_for_status()
-        .expect("error response to refresher message");
-
-    client
-}
 
 fn read_stdin_line() -> String {
     let stdin = stdin();
@@ -226,7 +111,7 @@ fn get_time(date: &NaiveDate, time_kind: &str) -> Option<DateTime<Utc>> {
     }
 }
 
-async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &FolderId, date: &NaiveDate) -> bool {
+async fn add_event_loop(client: &mut Client, config: &ExchangeConfig, calendar_folder: &FolderId, date: &NaiveDate) -> bool {
     let mut ask_free_busy_state = false;
     loop {
         println!("> Add an event on {}? [ynf]", date.format("%Y-%m-%d"));
@@ -312,7 +197,7 @@ async fn add_event_loop(client: &mut Client, config: &Config, calendar_folder: &
     true
 }
 
-async fn interaction_loop(mut client: Client, config: &Config, calendar_folder: &FolderId) {
+async fn interaction_loop(mut client: Client, config: &ExchangeConfig, calendar_folder: &FolderId) {
     loop {
         let date = loop {
             println!("> Date? [yyyymmdd] (or \"nvm\" to end)");
@@ -345,14 +230,14 @@ async fn main() {
     env_logger::init();
 
     // load config
-    let config: Config = {
+    let config: ExchangeConfig = {
         let config_string = std::fs::read_to_string("config.toml")
             .expect("failed to read config.toml");
         toml::from_str(&config_string)
             .expect("failed to parse config.toml")
     };
 
-    let client = initial_auth(&config).await;
+    let client = msswap::initial_auth(&config).await;
 
     let sfc_body = search_for_calendars();
     let sfc_response = client.post(&config.ews_url)

@@ -1,14 +1,4 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct Config {
-    pub ews_url: String,
-    pub username: String,
-    pub domain: String,
-    pub local_hostname: String,
-}
 
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

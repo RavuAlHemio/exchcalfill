@@ -1,0 +1,13 @@
+[package]
+name = "msswap"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64 = { version = "0.22" }
+ntlmclient = { version = "0.2" }
+reqwest = { version = "0.12", features = ["cookies", "rustls-tls"] }
+rpassword = { version = "7.4" }
+rustls = { version = "0.23" }
+serde = { version = "1.0", features = ["derive"] }
+webpki-roots = { version = "1.0" }
