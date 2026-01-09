@@ -1653,6 +1653,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sentyear"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "env_logger",
+ "msswap",
+ "reqwest",
+ "serde",
+ "sxd-document",
+ "sxd-xpath",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.221"
 source = "registry+https://github.com/rust-lang/crates.io-index"
