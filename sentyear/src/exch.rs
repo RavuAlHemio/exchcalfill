@@ -1,3 +1,4 @@
+use msswap::IdAndChangeKey;
 use sxd_document::{Package, QName};
 use sxd_document::dom::{Document, Element};
 
@@ -96,6 +97,76 @@ pub fn create_request_enumerate_send_folder(offset: usize) -> Package {
 
     let dist_folder_id_elem = doc.create_element(types_name("DistinguishedFolderId"));
     dist_folder_id_elem.set_attribute_value("Id", "sentitems");
+
+    pkg
+}
+
+
+pub fn create_request_find_folder(base_folder_id: &IdAndChangeKey, name: &str) -> Package {
+    let pkg = create_soap_envelope();
+    let doc = pkg.as_document();
+    let body = get_soap_body(doc);
+
+    let find_folder_elem = doc.create_element(messages_name("FindFolder"));
+    find_folder_elem.set_attribute_value("Traversal", "Deep");
+    body.append_child(find_folder_elem);
+
+    let folder_shape_elem = doc.create_element(messages_name("FolderShape"));
+    find_folder_elem.append_child(folder_shape_elem);
+
+    let base_shape_elem = doc.create_text_element(types_name("BaseShape"), "IdOnly");
+    folder_shape_elem.append_child(base_shape_elem);
+
+    let restriction_elem = doc.create_element(messages_name("Restriction"));
+    find_folder_elem.append_child(restriction_elem);
+
+    let is_equal_to_elem = doc.create_element(messages_name("IsEqualTo"));
+    restriction_elem.append_child(is_equal_to_elem);
+
+    let field_uri_elem = doc.create_element(types_name("FieldURI"));
+    field_uri_elem.set_attribute_value("FieldURI", "folder:DisplayName");
+    is_equal_to_elem.append_child(field_uri_elem);
+
+    let field_uri_or_constant_elem = doc.create_element(types_name("FieldURIOrConstant"));
+    is_equal_to_elem.append_child(field_uri_or_constant_elem);
+
+    let constant_elem = doc.create_element(types_name("Constant"));
+    constant_elem.set_attribute_value("Value", name);
+    field_uri_or_constant_elem.append_child(constant_elem);
+
+    let parent_folder_ids_elem = doc.create_element(messages_name("ParentFolderIds"));
+    find_folder_elem.append_child(parent_folder_ids_elem);
+
+    let folder_id_elem = doc.create_element(messages_name("FolderId"));
+    base_folder_id.set_on_xml_element(&folder_id_elem);
+
+    pkg
+}
+
+
+pub fn create_request_move_item(item_ids: &[IdAndChangeKey], dest_folder_id: &IdAndChangeKey) -> Package {
+    let pkg = create_soap_envelope();
+    let doc = pkg.as_document();
+    let body = get_soap_body(doc);
+
+    let move_item_elem = doc.create_element(messages_name("MoveItem"));
+    body.append_child(move_item_elem);
+
+    let to_folder_id_elem = doc.create_element(messages_name("ToFolderId"));
+    move_item_elem.append_child(to_folder_id_elem);
+
+    let folder_id_elem = doc.create_element(types_name("FolderId"));
+    dest_folder_id.set_on_xml_element(&folder_id_elem);
+    to_folder_id_elem.append_child(folder_id_elem);
+
+    let item_ids_elem = doc.create_element(messages_name("ItemIds"));
+    move_item_elem.append_child(item_ids_elem);
+
+    for item_id in item_ids {
+        let item_id_elem = doc.create_element(types_name("ItemId"));
+        item_id.set_on_xml_element(&item_id_elem);
+        item_ids_elem.append_child(item_id_elem);
+    }
 
     pkg
 }

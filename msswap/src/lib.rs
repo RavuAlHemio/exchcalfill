@@ -19,6 +19,38 @@ pub struct ExchangeConfig {
 }
 
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct IdAndChangeKey {
+    pub id: String,
+    pub change_key: Option<String>,
+}
+impl IdAndChangeKey {
+    pub fn new<I: Into<String>>(id: I) -> Self {
+        Self {
+            id: id.into(),
+            change_key: None,
+        }
+    }
+
+    pub fn new_with_change_key<I: Into<String>, C: Into<String>>(
+        id: I,
+        change_key: C,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            change_key: Some(change_key.into()),
+        }
+    }
+
+    pub fn set_on_xml_element(&self, element: &sxd_document::dom::Element<'_>) {
+        element.set_attribute_value("Id", &self.id);
+        if let Some(change_key) = self.change_key.as_ref() {
+            element.set_attribute_value("ChangeKey", change_key);
+        }
+    }
+}
+
+
 pub async fn initial_auth(config: &ExchangeConfig) -> Client {
     let password = prompt_password("PASSWORD? ")
         .expect("failed to read password");
