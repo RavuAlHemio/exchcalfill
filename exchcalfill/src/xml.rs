@@ -1,218 +1,160 @@
-use sxd_document::Package;
-use sxd_document::dom::Element;
-use sxd_document::parser;
-use sxd_document::writer::Writer;
-use sxd_xpath::{Context, Factory, Value, XPath};
-use sxd_xpath::nodeset::{Node, Nodeset};
+use msswap::{EXCHANGE_MESSAGES_NS_URI, EXCHANGE_TYPES_NS_URI, SOAP_NS_URI, xot_ext::{NodeExt, XotExt}};
+use xot::{Node, Xot, output::xml::Parameters};
 
 use crate::model::{Calendar, FolderId, NewEvent};
 
 
-const SOAP_NS_URI: &str = "http://schemas.xmlsoap.org/soap/envelope/";
-const EXCHANGE_TYPES_NS_URI: &str = "http://schemas.microsoft.com/exchange/services/2006/types";
-const EXCHANGE_MESSAGES_NS_URI: &str = "http://schemas.microsoft.com/exchange/services/2006/messages";
-
-
-trait IntoNodeset<'d> {
-    fn into_nodeset(self) -> Option<Nodeset<'d>>;
-}
-impl<'d> IntoNodeset<'d> for Value<'d> {
-    fn into_nodeset(self) -> Option<Nodeset<'d>> {
-        match self {
-            Value::Nodeset(ns) => Some(ns),
-            _ => None,
-        }
-    }
-}
-
-trait GimmeXPath {
-    fn gimme_xpath(&self, expression: &str) -> XPath;
-}
-impl GimmeXPath for Factory {
-    fn gimme_xpath(&self, expression: &str) -> XPath {
-        self.build(expression)
-            .expect("failed to parse XPath expression")
-            .expect("XPath expression is empty")
-    }
-}
-
-trait EvaluateNodeset {
-    fn evaluate_nodeset<'d, N: Into<Node<'d>>>(&self, context: &Context<'d>, node: N) -> Nodeset<'d>;
-
-    fn evaluate_element<'d, N: Into<Node<'d>>>(&self, context: &Context<'d>, node: N) -> Element<'d> {
-        self.evaluate_nodeset(context, node)
-            .document_order_first()
-            .expect("no node found")
-            .element()
-            .expect("not an element")
-    }
-
-    fn evaluate_text<'d, N: Into<Node<'d>>>(&self, context: &Context<'d>, node: N) -> &'d str {
-        self.evaluate_nodeset(context, node)
-            .document_order_first()
-            .expect("no node found")
-            .text()
-            .expect("not a text node")
-            .text()
-    }
-}
-impl EvaluateNodeset for XPath {
-    fn evaluate_nodeset<'d, N: Into<Node<'d>>>(&self, context: &Context<'d>, node: N) -> Nodeset<'d> {
-        self.evaluate(context, node)
-            .expect("failed to evaluate XPath expression")
-            .into_nodeset()
-            .expect("XPath result is not a nodeset")
-    }
-}
-
-
 pub(crate) fn search_for_calendars() -> Vec<u8> {
-    let find_calendar_folders_package = Package::new();
-    let find_calendar_folders = find_calendar_folders_package.as_document();
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(true);
 
-    let envelope = find_calendar_folders.create_element("soap:Envelope");
-    envelope.set_attribute_value("xmlns:soap", SOAP_NS_URI);
-    envelope.set_attribute_value("xmlns:t", EXCHANGE_TYPES_NS_URI);
-    envelope.set_attribute_value("xmlns:m", EXCHANGE_MESSAGES_NS_URI);
-    find_calendar_folders.root().append_child(envelope);
+    // we need this for timezone smartness
+    let req_version = xot.create_element_ns(soap_doc.t_ns, "RequestServerVersion");
+    xot.set_attribute_value(req_version, "Version", "Exchange2016");
+    xot.append(soap_doc.soap_header.unwrap(), req_version).unwrap();
 
-    let header = find_calendar_folders.create_element("soap:Header");
-    envelope.append_child(header);
+    let find_folder = xot.create_element_ns(soap_doc.m_ns, "FindFolder");
+    xot.set_attribute_value(find_folder, "Traversal", "Shallow");
+    xot.append(soap_doc.soap_body, find_folder).unwrap();
 
-    let version = find_calendar_folders.create_element("t:RequestServerVersion");
-    version.set_attribute_value("Version", "Exchange2016");
-    header.append_child(version);
+    let folder_shape = xot.create_element_ns(soap_doc.m_ns, "FolderShape");
+    xot.append(find_folder, folder_shape).unwrap();
 
-    let body = find_calendar_folders.create_element("soap:Body");
-    envelope.append_child(body);
+    let base_shape = xot.create_text_element_ns(soap_doc.t_ns, "BaseShape", "IdOnly");
+    xot.append(folder_shape, base_shape).unwrap();
 
-    let find_folder = find_calendar_folders.create_element("m:FindFolder");
-    find_folder.set_attribute_value("Traversal", "Shallow");
-    body.append_child(find_folder);
+    let add_props = xot.create_element_ns(soap_doc.t_ns, "AdditionalProperties");
+    xot.append(folder_shape, add_props).unwrap();
 
-    let folder_shape = find_calendar_folders.create_element("m:FolderShape");
-    find_folder.append_child(folder_shape);
+    let name_field_uri = xot.create_element_ns(soap_doc.t_ns, "FieldURI");
+    xot.set_attribute_value(name_field_uri, "FieldURI", "folder:DisplayName");
+    xot.append(add_props, name_field_uri).unwrap();
 
-    let base_shape = find_calendar_folders.create_element("t:BaseShape");
-    base_shape.set_text("IdOnly");
-    folder_shape.append_child(base_shape);
+    let class_field_uri = xot.create_element_ns(soap_doc.t_ns, "FieldURI");
+    xot.set_attribute_value(class_field_uri, "FieldURI", "folder:FolderClass");
+    xot.append(add_props, class_field_uri).unwrap();
 
-    let add_props = find_calendar_folders.create_element("t:AdditionalProperties");
-    folder_shape.append_child(add_props);
+    let restriction = xot.create_element_ns(soap_doc.m_ns, "Restriction");
+    xot.append(find_folder, restriction).unwrap();
 
-    let name_field_uri = find_calendar_folders.create_element("t:FieldURI");
-    name_field_uri.set_attribute_value("FieldURI", "folder:DisplayName");
-    add_props.append_child(name_field_uri);
+    let equals = xot.create_element_ns(soap_doc.t_ns, "IsEqualTo");
+    xot.append(restriction, equals).unwrap();
 
-    let class_field_uri = find_calendar_folders.create_element("t:FieldURI");
-    class_field_uri.set_attribute_value("FieldURI", "folder:FolderClass");
-    add_props.append_child(class_field_uri);
+    let field_uri = xot.create_element_ns(soap_doc.t_ns, "FieldURI");
+    xot.set_attribute_value(field_uri, "FieldURI", "folder:FolderClass");
+    xot.append(equals, field_uri).unwrap();
 
-    let restriction = find_calendar_folders.create_element("m:Restriction");
-    find_folder.append_child(restriction);
+    let fuoc = xot.create_element_ns(soap_doc.t_ns, "FieldURIOrConstant");
+    xot.append(equals, fuoc).unwrap();
 
-    let equals = find_calendar_folders.create_element("t:IsEqualTo");
-    restriction.append_child(equals);
+    let constant = xot.create_element_ns(soap_doc.t_ns, "Constant");
+    xot.set_attribute_value(constant, "Value", "IPF.Appointment");
+    xot.append(fuoc, constant).unwrap();
 
-    let field_uri = find_calendar_folders.create_element("t:FieldURI");
-    field_uri.set_attribute_value("FieldURI", "folder:FolderClass");
-    equals.append_child(field_uri);
+    let parent_folder_ids = xot.create_element_ns(soap_doc.m_ns, "ParentFolderIds");
+    xot.append(find_folder, parent_folder_ids).unwrap();
 
-    let fuoc = find_calendar_folders.create_element("t:FieldURIOrConstant");
-    equals.append_child(fuoc);
-
-    let constant = find_calendar_folders.create_element("t:Constant");
-    constant.set_attribute_value("Value", "IPF.Appointment");
-    fuoc.append_child(constant);
-
-    let parent_folder_ids = find_calendar_folders.create_element("m:ParentFolderIds");
-    find_folder.append_child(parent_folder_ids);
-
-    let dist_folder_id = find_calendar_folders.create_element("t:DistinguishedFolderId");
-    dist_folder_id.set_attribute_value("Id", "msgfolderroot");
-    parent_folder_ids.append_child(dist_folder_id);
+    let dist_folder_id = xot.create_element_ns(soap_doc.t_ns, "DistinguishedFolderId");
+    xot.set_attribute_value(dist_folder_id, "Id", "msgfolderroot");
+    xot.append(parent_folder_ids, dist_folder_id).unwrap();
 
     let mut buf = Vec::new();
-    let wr = Writer::new()
-        .set_write_encoding(true);
-    wr.format_document(&find_calendar_folders, &mut buf)
+    xot.serialize_xml_write(Parameters::default(), soap_doc.document, &mut buf)
         .expect("failed to serialize XML");
     buf
 }
 
 pub(crate) fn obtain_some_calendar_entry(folder_id: &FolderId) -> Vec<u8> {
-    let find_calendar_folders_package = Package::new();
-    let find_calendar_folders = find_calendar_folders_package.as_document();
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(true);
 
-    let envelope = find_calendar_folders.create_element("soap:Envelope");
-    envelope.set_attribute_value("xmlns:soap", SOAP_NS_URI);
-    envelope.set_attribute_value("xmlns:t", EXCHANGE_TYPES_NS_URI);
-    envelope.set_attribute_value("xmlns:m", EXCHANGE_MESSAGES_NS_URI);
-    find_calendar_folders.root().append_child(envelope);
+    // we need this for timezone smartness
+    let req_version = xot.create_element_ns(soap_doc.t_ns, "RequestServerVersion");
+    xot.set_attribute_value(req_version, "Version", "Exchange2016");
+    xot.append(soap_doc.soap_header.unwrap(), req_version).unwrap();
 
-    let header = find_calendar_folders.create_element("soap:Header");
-    envelope.append_child(header);
+    let find_folder = xot.create_element_ns(soap_doc.m_ns, "FindItem");
+    xot.set_attribute_value(find_folder, "Traversal", "Shallow");
+    xot.append(soap_doc.soap_body, find_folder).unwrap();
 
-    let version = find_calendar_folders.create_element("t:RequestServerVersion");
-    version.set_attribute_value("Version", "Exchange2016");
-    header.append_child(version);
+    let item_shape = xot.create_element_ns(soap_doc.m_ns, "ItemShape");
+    xot.append(find_folder, item_shape).unwrap();
 
-    let body = find_calendar_folders.create_element("soap:Body");
-    envelope.append_child(body);
+    let base_shape = xot.create_text_element_ns(soap_doc.t_ns, "BaseShape", "AllProperties");
+    xot.append(item_shape, base_shape).unwrap();
 
-    let find_folder = find_calendar_folders.create_element("m:FindItem");
-    find_folder.set_attribute_value("Traversal", "Shallow");
-    body.append_child(find_folder);
+    let parent_folder_ids = xot.create_element_ns(soap_doc.m_ns, "ParentFolderIds");
+    xot.append(find_folder, parent_folder_ids).unwrap();
 
-    let item_shape = find_calendar_folders.create_element("m:ItemShape");
-    find_folder.append_child(item_shape);
-
-    let base_shape = find_calendar_folders.create_element("t:BaseShape");
-    base_shape.set_text("AllProperties");
-    item_shape.append_child(base_shape);
-
-    let parent_folder_ids = find_calendar_folders.create_element("m:ParentFolderIds");
-    find_folder.append_child(parent_folder_ids);
-
-    let dist_folder_id = find_calendar_folders.create_element("t:FolderId");
-    dist_folder_id.set_attribute_value("Id", &folder_id.id);
-    dist_folder_id.set_attribute_value("ChangeKey", &folder_id.change_key);
-    parent_folder_ids.append_child(dist_folder_id);
+    let dist_folder_id = xot.create_element_ns(soap_doc.t_ns, "FolderId");
+    xot.set_attribute_value(dist_folder_id, "Id", &folder_id.id);
+    xot.set_attribute_value(dist_folder_id, "ChangeKey", &folder_id.change_key);
+    xot.append(parent_folder_ids, dist_folder_id).unwrap();
 
     let mut buf = Vec::new();
-    let wr = Writer::new()
-        .set_write_encoding(true);
-    wr.format_document(&find_calendar_folders, &mut buf)
+    xot.serialize_xml_write(Parameters::default(), soap_doc.document, &mut buf)
         .expect("failed to serialize XML");
     buf
 }
 
 pub(crate) fn extract_found_calendars(xml_bytes: Vec<u8>) -> Vec<Calendar> {
-    let xml_string = String::from_utf8(xml_bytes)
-        .expect("failed to decode XML als UTF-8");
-    let xml_package = parser::parse(&xml_string)
+    let mut xot = Xot::new();
+    let doc = xot.parse_bytes(&xml_bytes)
         .expect("failed to parse XML");
-    let doc = xml_package.as_document();
 
-    let mut xpath_ctx = Context::new();
-    xpath_ctx.set_namespace("soap", SOAP_NS_URI);
-    xpath_ctx.set_namespace("t", EXCHANGE_TYPES_NS_URI);
-    xpath_ctx.set_namespace("m", EXCHANGE_MESSAGES_NS_URI);
+    let soap_ns = xot.namespace(SOAP_NS_URI).unwrap();
+    let m_ns = xot.namespace(EXCHANGE_MESSAGES_NS_URI).unwrap();
+    let t_ns = xot.namespace(EXCHANGE_TYPES_NS_URI).unwrap();
 
-    let xpath_factory = Factory::new();
+    let envelope_n = xot.add_name_ns("Envelope", soap_ns);
+    let body_n = xot.add_name_ns("Body", soap_ns);
+    let find_folder_resp_n = xot.add_name_ns("FindFolderResponse", m_ns);
+    let resp_msgs_n = xot.add_name_ns("ResponseMessages", m_ns);
+    let find_folder_resp_msg_n = xot.add_name_ns("FindFolderResponseMessage", m_ns);
+    let root_folder_n = xot.add_name_ns("RootFolder", m_ns);
+    let folders_n = xot.add_name_ns("Folders", t_ns);
+    let calendar_folder_n = xot.add_name_ns("CalendarFolder", t_ns);
+    let folder_id_n = xot.add_name_ns("FolderId", t_ns);
+    let display_name_n = xot.add_name_ns("DisplayName", t_ns);
+    let id_n = xot.add_name("Id");
+    let change_key_n = xot.add_name("ChangeKey");
 
-    let calendars_xpath = xpath_factory.gimme_xpath("/soap:Envelope/soap:Body/m:FindFolderResponse/m:ResponseMessages/m:FindFolderResponseMessage/m:RootFolder/t:Folders/t:CalendarFolder");
-    let folder_id_xpath = xpath_factory.gimme_xpath("./t:FolderId");
-    let display_name_xpath = xpath_factory.gimme_xpath("./t:DisplayName/text()");
+    let calendar_nodes: Vec<Node> = doc
+        .first_child_element_named(&xot, envelope_n)
+        .expect("no soap:Envelope")
+        .first_child_element_named(&xot, body_n)
+        .expect("no soap:Body")
+        .first_child_element_named(&xot, find_folder_resp_n)
+        .expect("no m:FindFolderResponse")
+        .first_child_element_named(&xot, resp_msgs_n)
+        .expect("no m:ResponseMessages")
+        .first_child_element_named(&xot, find_folder_resp_msg_n)
+        .expect("no m:FindFolderResponseMessage")
+        .first_child_element_named(&xot, root_folder_n)
+        .expect("no m:RootFolder")
+        .first_child_element_named(&xot, folders_n)
+        .expect("no t:Folders")
+        .child_elements_named(&xot, calendar_folder_n);
 
-    let calendars_value = calendars_xpath.evaluate_nodeset(&xpath_ctx, doc.root());
     let mut calendars = Vec::new();
-    for calendar_node in calendars_value {
-        let folder_id_elem = folder_id_xpath.evaluate_element(&xpath_ctx, calendar_node);
-        let folder_id = folder_id_elem.attribute_value("Id").expect("no Id attribute");
-        let change_key = folder_id_elem.attribute_value("ChangeKey").expect("no ChangeKey attribute");
+    for calendar_node in calendar_nodes {
+        let folder_id_elem = calendar_node
+            .children(&xot).into_iter()
+            .filter(|c| xot.is_element_named(*c, folder_id_n))
+            .nth(0).expect("no t:FolderId");
+        let folder_id = xot.get_attribute(folder_id_elem, id_n)
+            .expect("no Id attribute");
+        let change_key = xot.get_attribute(folder_id_elem, change_key_n)
+            .expect("no ChangeKey attribute");
 
-        let display_name = display_name_xpath.evaluate_text(&xpath_ctx, calendar_node);
+        let display_name_text = calendar_node
+            .children(&xot).into_iter()
+            .filter(|c| xot.is_element_named(*c, display_name_n))
+            .nth(0).expect("no t:DisplayName")
+            .children(&xot).into_iter()
+            .filter(|c| xot.is_text(*c))
+            .nth(0).expect("no text node");
+        let display_name_str = xot.text_str(display_name_text).unwrap();
 
         let folder_id_obj = FolderId::new(
             folder_id.to_owned(),
@@ -221,7 +163,7 @@ pub(crate) fn extract_found_calendars(xml_bytes: Vec<u8>) -> Vec<Calendar> {
 
         calendars.push(Calendar::new(
             folder_id_obj,
-            display_name.to_owned(),
+            display_name_str.to_owned(),
         ));
     }
 
@@ -231,114 +173,117 @@ pub(crate) fn extract_found_calendars(xml_bytes: Vec<u8>) -> Vec<Calendar> {
 }
 
 pub(crate) fn create_event(event: &NewEvent, folder_id: &FolderId) -> Vec<u8> {
-    let create_event_package = Package::new();
-    let create_event = create_event_package.as_document();
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(true);
 
-    let envelope = create_event.create_element("soap:Envelope");
-    envelope.set_attribute_value("xmlns:soap", SOAP_NS_URI);
-    envelope.set_attribute_value("xmlns:t", EXCHANGE_TYPES_NS_URI);
-    envelope.set_attribute_value("xmlns:m", EXCHANGE_MESSAGES_NS_URI);
-    create_event.root().append_child(envelope);
+    // we need this for timezone smartness
+    let req_version = xot.create_element_ns(soap_doc.t_ns, "RequestServerVersion");
+    xot.set_attribute_value(req_version, "Version", "Exchange2016");
+    xot.append(soap_doc.soap_header.unwrap(), req_version).unwrap();
 
-    let header = create_event.create_element("soap:Header");
-    envelope.append_child(header);
-
-    let version = create_event.create_element("t:RequestServerVersion");
-    version.set_attribute_value("Version", "Exchange2016");
-    header.append_child(version);
-
-    let body = create_event.create_element("soap:Body");
-    envelope.append_child(body);
-
-    let create_item = create_event.create_element("m:CreateItem");
+    let create_item = xot.create_element_ns(soap_doc.m_ns, "CreateItem");
     // the following attribute ensures that an appointment and not a meeting is created:
-    create_item.set_attribute_value("SendMeetingInvitations", "SendToNone");
-    body.append_child(create_item);
+    xot.set_attribute_value(create_item, "SendMeetingInvitations", "SendToNone");
+    xot.append(soap_doc.soap_body, create_item).unwrap();
 
-    let target_folder_id = create_event.create_element("m:SavedItemFolderId");
-    create_item.append_child(target_folder_id);
+    let target_folder_id = xot.create_element_ns(soap_doc.m_ns, "SavedItemFolderId");
+    xot.append(create_item, target_folder_id).unwrap();
 
-    let folder_id_elem = create_event.create_element("t:FolderId");
-    folder_id_elem.set_attribute_value("Id", &folder_id.id);
-    folder_id_elem.set_attribute_value("ChangeKey", &folder_id.change_key);
-    target_folder_id.append_child(folder_id_elem);
+    let folder_id_elem = xot.create_element_ns(soap_doc.t_ns, "FolderId");
+    xot.set_attribute_value(folder_id_elem, "Id", &folder_id.id);
+    xot.set_attribute_value(folder_id_elem, "ChangeKey", &folder_id.change_key);
+    xot.append(target_folder_id, folder_id_elem).unwrap();
 
-    let items = create_event.create_element("m:Items");
-    create_item.append_child(items);
+    let items = xot.create_element_ns(soap_doc.m_ns, "Items");
+    xot.append(create_item, items).unwrap();
 
-    let calendar_item = create_event.create_element("t:CalendarItem");
-    items.append_child(calendar_item);
+    let calendar_item = xot.create_element_ns(soap_doc.t_ns, "CalendarItem");
+    xot.append(items, calendar_item).unwrap();
 
-    let subject = create_event.create_element("t:Subject");
-    subject.set_text(&event.title);
-    calendar_item.append_child(subject);
+    let subject = xot.create_text_element_ns(soap_doc.t_ns, "Subject", &event.title);
+    xot.append(calendar_item, subject).unwrap();
 
     if let Some(loc) = &event.location {
-        let location = create_event.create_element("t:Location");
-        location.set_text(&loc);
-        calendar_item.append_child(location);
+        let location = xot.create_text_element_ns(soap_doc.t_ns, "Location", loc);
+        xot.append(calendar_item, location).unwrap();
     }
 
-    let reminder_is_set = create_event.create_element("t:ReminderIsSet");
-    reminder_is_set.set_text("false");
-    calendar_item.append_child(reminder_is_set);
+    let reminder_is_set = xot.create_text_element_ns(soap_doc.t_ns, "ReminderIsSet", "false");
+    xot.append(calendar_item, reminder_is_set).unwrap();
 
-    let start = create_event.create_element("t:Start");
-    start.set_text(&event.start_time.format("%Y-%m-%dT%H:%M:%S").to_string());
-    calendar_item.append_child(start);
+    let start = xot.create_text_element_ns(
+        soap_doc.t_ns,
+        "Start",
+        &event.start_time.format("%Y-%m-%dT%H:%M:%S").to_string(),
+    );
+    xot.append(calendar_item, start).unwrap();
 
-    let end = create_event.create_element("t:End");
-    end.set_text(&event.end_time.format("%Y-%m-%dT%H:%M:%S").to_string());
-    calendar_item.append_child(end);
+    let end = xot.create_text_element_ns(
+        soap_doc.t_ns,
+        "End",
+        &event.end_time.format("%Y-%m-%dT%H:%M:%S").to_string(),
+    );
+    xot.append(calendar_item, end).unwrap();
 
-    let is_all_day = create_event.create_element("t:IsAllDayEvent");
-    is_all_day.set_text("false");
-    calendar_item.append_child(is_all_day);
+    let is_all_day = xot.create_text_element_ns(
+        soap_doc.t_ns,
+        "IsAllDayEvent",
+        "false",
+    );
+    xot.append(calendar_item, is_all_day).unwrap();
 
-    let legacy_free_busy = create_event.create_element("t:LegacyFreeBusyStatus");
-    legacy_free_busy.set_text(event.free_busy_status.as_exchange_str());
-    calendar_item.append_child(legacy_free_busy);
+    let legacy_free_busy = xot.create_text_element_ns(
+        soap_doc.t_ns,
+        "LegacyFreeBusyStatus",
+        event.free_busy_status.as_exchange_str(),
+    );
+    xot.append(calendar_item, legacy_free_busy).unwrap();
 
     let mut buf = Vec::new();
-    let wr = Writer::new()
-        .set_write_encoding(true);
-    wr.format_document(&create_event, &mut buf)
+    xot.serialize_xml_write(Parameters::default(), soap_doc.document, &mut buf)
         .expect("failed to serialize XML");
     buf
 }
 
 pub(crate) fn extract_success(xml_bytes: Vec<u8>) {
-    let xml_string = String::from_utf8(xml_bytes)
-        .expect("failed to decode XML als UTF-8");
-    let xml_package = parser::parse(&xml_string)
+    let mut xot = Xot::new();
+    let doc = xot.parse_bytes(&xml_bytes)
         .expect("failed to parse XML");
-    let doc = xml_package.as_document();
 
-    let mut xpath_ctx = Context::new();
-    xpath_ctx.set_namespace("soap", SOAP_NS_URI);
-    xpath_ctx.set_namespace("t", EXCHANGE_TYPES_NS_URI);
-    xpath_ctx.set_namespace("m", EXCHANGE_MESSAGES_NS_URI);
+    let soap_ns = xot.namespace(SOAP_NS_URI).unwrap();
+    let m_ns = xot.namespace(EXCHANGE_MESSAGES_NS_URI).unwrap();
 
-    let xpath_factory = Factory::new();
+    let envelope_n = xot.add_name_ns("Envelope", soap_ns);
+    let body_n = xot.add_name_ns("Body", soap_ns);
+    let cir_n = xot.add_name_ns("CreateItemResponse", m_ns);
+    let resp_msgs_n = xot.add_name_ns("ResponseMessages", m_ns);
+    let cirm_n = xot.add_name_ns("CreateItemResponseMessage", m_ns);
+    let resp_code_n = xot.add_name_ns("ResponseCode", m_ns);
+    let resp_class_n = xot.add_name("ResponseClass");
 
-    let response_xpath = xpath_factory.gimme_xpath("/soap:Envelope/soap:Body/m:CreateItemResponse/m:ResponseMessages/m:CreateItemResponseMessage");
-    let response_code_xpath = xpath_factory.gimme_xpath("./m:ResponseCode/text()");
+    let response_nodes: Vec<Node> = doc
+        .first_child_element_named(&xot, envelope_n)
+        .expect("no soap:Envelope")
+        .first_child_element_named(&xot, body_n)
+        .expect("no soap:Body")
+        .first_child_element_named(&xot, cir_n)
+        .expect("no m:CreateItemResponse")
+        .first_child_element_named(&xot, resp_msgs_n)
+        .expect("no m:ResponseMessages")
+        .children(&xot).into_iter()
+        .filter(|c| xot.is_element_named(*c, cirm_n))
+        .collect();
 
-    let response_nodes = response_xpath.evaluate_nodeset(&xpath_ctx, doc.root());
     for response_node in response_nodes {
-        let resp_class_elem = match response_node.element() {
-            Some(e) => e,
-            None => continue,
-        };
-        let resp_class_text = resp_class_elem
-            .attribute_value("ResponseClass").expect("no ResponseClass attribute");
-        let resp_code_text = response_code_xpath.evaluate_text(&xpath_ctx, response_node);
+        let code_string = response_node
+            .first_child_element_named(&xot, resp_code_n).expect("no m:ResponseCode")
+            .child_text(&xot).expect("m:ResponseCode does not only have text children");
 
-        if resp_class_text != "Success" || resp_code_text != "NoError" {
-            println!("response class: {}, response code: {}", resp_class_text, resp_code_text);
-            println!("{}", xml_string);
+        let resp_class = xot.get_attribute(response_node, resp_class_n).unwrap();
+        if resp_class != "Success" || code_string != "NoError" {
+            println!("response class: {}, response code: {}", resp_class, code_string);
+            println!("{:?}", std::str::from_utf8(&xml_bytes));
         }
-
         return;
     }
 }

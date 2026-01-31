@@ -1,3 +1,6 @@
+pub mod xot_ext;
+
+
 use std::sync::Arc;
 
 use base64::Engine;
@@ -5,9 +8,14 @@ use base64::prelude::BASE64_STANDARD;
 use reqwest::Client;
 use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
+use xot::Xot;
 
 
 const USER_AGENT: &str = "msswap (github.com/RavuAlHemio/exchcalfill)";
+
+pub const SOAP_NS_URI: &str = "http://schemas.xmlsoap.org/soap/envelope/";
+pub const EXCHANGE_TYPES_NS_URI: &str = "http://schemas.microsoft.com/exchange/services/2006/types";
+pub const EXCHANGE_MESSAGES_NS_URI: &str = "http://schemas.microsoft.com/exchange/services/2006/messages";
 
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -16,6 +24,7 @@ pub struct ExchangeConfig {
     pub username: String,
     pub domain: String,
     pub local_hostname: String,
+    #[serde(default)] pub password: Option<String>,
 }
 
 
@@ -42,18 +51,44 @@ impl IdAndChangeKey {
         }
     }
 
-    pub fn set_on_xml_element(&self, element: &sxd_document::dom::Element<'_>) {
-        element.set_attribute_value("Id", &self.id);
+    pub fn set_on_xml_element(&self, xot: &mut Xot, element: xot::Node) {
+        let id_name = xot.add_name("Id");
+        xot.set_attribute(element, id_name, &self.id);
         if let Some(change_key) = self.change_key.as_ref() {
-            element.set_attribute_value("ChangeKey", change_key);
+            let change_key_name = xot.add_name("ChangeKey");
+            xot.set_attribute(element, change_key_name, change_key);
+        }
+    }
+
+    pub fn from_xml_element(xot: &mut Xot, element: xot::Node) -> Option<Self> {
+        let id_name = xot.add_name("Id");
+        if let Some(id_attr) = xot.get_attribute(element, id_name).map(|v| v.to_owned()) {
+            let change_attr_name = xot.add_name("ChangeKey");
+            if let Some(change_key_attr) = xot.get_attribute(element, change_attr_name) {
+                Some(Self {
+                    id: id_attr.to_owned(),
+                    change_key: Some(change_key_attr.to_owned()),
+                })
+            } else {
+                Some(Self {
+                    id: id_attr.to_owned(),
+                    change_key: None,
+                })
+            }
+        } else {
+            None
         }
     }
 }
 
 
 pub async fn initial_auth(config: &ExchangeConfig) -> Client {
-    let password = prompt_password("PASSWORD? ")
-        .expect("failed to read password");
+    let password = if let Some(pw) = config.password.as_ref() {
+        pw.clone()
+    } else {
+        prompt_password("PASSWORD? ")
+            .expect("failed to read password")
+    };
 
     // negotiate NTLM
     let nego_flags

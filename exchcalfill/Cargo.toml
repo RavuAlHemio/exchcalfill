@@ -10,7 +10,6 @@ env_logger = { version = "0.11" }
 msswap = { path = "../msswap" }
 reqwest = { version = "0.12", features = ["cookies", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
-sxd-document = { version = "0.3.2" }
-sxd-xpath = { version = "0.4" }
+xot = { version = "0.31" }
 tokio = { version = "1.47", features = ["full"] }
 toml = { version = "0.9" }

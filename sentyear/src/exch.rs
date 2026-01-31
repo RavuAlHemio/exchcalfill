@@ -1,172 +1,302 @@
-use msswap::IdAndChangeKey;
-use sxd_document::{Package, QName};
-use sxd_document::dom::{Document, Element};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use msswap::{EXCHANGE_MESSAGES_NS_URI, EXCHANGE_TYPES_NS_URI, IdAndChangeKey, SOAP_NS_URI, xot_ext::{NodeExt, XotExt}};
+use xot::{Node, Xot};
 
 
-const SOAP_NS: &str = "http://schemas.xmlsoap.org/soap/envelope/";
-const MESSAGES_NS: &str = "http://schemas.microsoft.com/exchange/services/2006/messages";
-const TYPES_NS: &str = "http://schemas.microsoft.com/exchange/services/2006/types";
+const EXCHANGE_TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
 
 
-macro_rules! name_func {
-    ($func_name:ident, $ns_url:expr) => {
-        fn $func_name<'s>(name: &'s str) -> QName<'s> {
-            QName::with_namespace_uri(Some($ns_url), name)
-        }
-    };
-}
-name_func!(soap_name, SOAP_NS);
-name_func!(messages_name, MESSAGES_NS);
-name_func!(types_name, TYPES_NS);
-
-
-trait DocumentExt<'d> {
-    fn create_text_element<'n, N: Into<QName<'n>>, T: AsRef<str>>(&self, name: N, text: T) -> Element<'d>;
-}
-impl<'d> DocumentExt<'d> for Document<'d> {
-    fn create_text_element<'n, N: Into<QName<'n>>, T: AsRef<str>>(&self, name: N, text: T) -> Element<'d> {
-        let elem = self.create_element(name);
-        let text_node = self.create_text(text.as_ref());
-        elem.append_child(text_node);
-        elem
-    }
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SentItem {
+    pub id: IdAndChangeKey,
+    pub sent: DateTime<Utc>,
 }
 
 
-fn create_soap_envelope() -> Package {
-    let pkg = Package::new();
-    let doc = pkg.as_document();
+pub fn create_request_enumerate_sent_folder(offset: usize) -> (Xot, Node) {
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(false);
 
-    let root_elem = doc.create_element(soap_name("Envelope"));
-    root_elem.set_attribute_value("xmlns:soap", SOAP_NS);
-    root_elem.set_attribute_value("xmlns:m", MESSAGES_NS);
-    root_elem.set_attribute_value("xmlns:t", TYPES_NS);
-    doc.root().append_child(root_elem);
+    let find_item_n = xot.add_name_ns("FindItem", soap_doc.m_ns);
+    let find_item_elem = xot.new_element(find_item_n);
+    xot.set_attribute_value(find_item_elem, "Traversal", "Shallow");
+    xot.append(soap_doc.soap_body, find_item_elem).unwrap();
 
-    let body_elem = doc.create_element(soap_name("Body"));
-    root_elem.append_child(body_elem);
+    let item_shape_n = xot.add_name_ns("ItemShape", soap_doc.m_ns);
+    let item_shape_elem = xot.new_element(item_shape_n);
+    xot.append(find_item_elem, item_shape_elem).unwrap();
 
-    pkg
-}
+    let base_shape_elem = xot.create_text_element_ns(soap_doc.t_ns, "BaseShape", "IdOnly");
+    xot.append(item_shape_elem, base_shape_elem).unwrap();
 
-fn create_text_elem<'d>(doc: &Document<'d>, name: QName<'d>, text: &str) -> Element<'d> {
-    let elem = doc.create_element(name);
-    let text_node = doc.create_text(text);
-    elem.append_child(text_node);
-    elem
-}
+    let additional_properties_elem = xot.create_element_ns(soap_doc.t_ns, "AdditionalProperties");
+    xot.append(item_shape_elem, additional_properties_elem).unwrap();
 
-fn get_soap_body<'d>(doc: Document<'d>) -> Element<'d> {
-    let root_elem = doc
-        .root()
-        .children().into_iter()
-        .filter_map(|c| c.element())
-        .nth(0).expect("document has no root element");
-    if root_elem.name() != soap_name("Envelope") {
-        panic!("root element is not a SOAP Envelope");
-    }
-    root_elem
-        .children().into_iter()
-        .filter_map(|c| c.element())
-        .filter(|e| e.name() == soap_name("Body"))
-        .nth(0).expect("SOAP Envelope does not contain a Body")
-}
+    let field_uri_sent_elem = xot.create_element_ns(soap_doc.t_ns, "FieldURI");
+    xot.set_attribute_value(field_uri_sent_elem, "FieldURI", "item:DateTimeSent");
+    xot.append(additional_properties_elem, field_uri_sent_elem).unwrap();
 
+    let pagination_elem = xot.create_element_ns(soap_doc.m_ns, "IndexedPageViewItemView");
+    xot.set_attribute_value(pagination_elem, "BasePoint", "Beginning");
+    xot.set_attribute_value(pagination_elem, "Offset", &format!("{}", offset));
+    xot.append(find_item_elem, pagination_elem).unwrap();
 
-pub fn create_request_enumerate_send_folder(offset: usize) -> Package {
-    let pkg = create_soap_envelope();
-    let doc = pkg.as_document();
-    let body = get_soap_body(doc);
+    let parent_folder_ids_elem = xot.create_element_ns(soap_doc.m_ns, "ParentFolderIds");
+    xot.append(find_item_elem, parent_folder_ids_elem).unwrap();
 
-    let find_item_elem = doc.create_element(messages_name("FindItem"));
-    find_item_elem.set_attribute_value("Traversal", "Shallow");
-    body.append_child(find_item_elem);
+    let dist_folder_id_elem = xot.create_element_ns(soap_doc.t_ns, "DistinguishedFolderId");
+    xot.set_attribute_value(dist_folder_id_elem, "Id", "sentitems");
+    xot.append(parent_folder_ids_elem, dist_folder_id_elem).unwrap();
 
-    let item_shape_elem = doc.create_element(messages_name("ItemShape"));
-    find_item_elem.append_child(item_shape_elem);
-
-    let base_shape_elem = doc.create_text_element(types_name("BaseShape"), "IdOnly");
-    item_shape_elem.append_child(base_shape_elem);
-
-    let pagination_elem = doc.create_element(messages_name("IndexedPageViewItemView"));
-    pagination_elem.set_attribute_value("BasePoint", "Beginning");
-    pagination_elem.set_attribute_value("Offset", &format!("{}", offset));
-
-    let parent_folder_ids_elem = doc.create_element(messages_name("ParentFolderIds"));
-    find_item_elem.append_child(parent_folder_ids_elem);
-
-    let dist_folder_id_elem = doc.create_element(types_name("DistinguishedFolderId"));
-    dist_folder_id_elem.set_attribute_value("Id", "sentitems");
-
-    pkg
+    (xot, soap_doc.document)
 }
 
 
-pub fn create_request_find_folder(base_folder_id: &IdAndChangeKey, name: &str) -> Package {
-    let pkg = create_soap_envelope();
-    let doc = pkg.as_document();
-    let body = get_soap_body(doc);
+pub fn create_request_get_known_folder(known_folder_id: &str) -> (Xot, Node) {
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(false);
 
-    let find_folder_elem = doc.create_element(messages_name("FindFolder"));
-    find_folder_elem.set_attribute_value("Traversal", "Deep");
-    body.append_child(find_folder_elem);
+    let get_folder_elem = xot.create_element_ns(soap_doc.m_ns, "GetFolder");
+    xot.append(soap_doc.soap_body, get_folder_elem).unwrap();
 
-    let folder_shape_elem = doc.create_element(messages_name("FolderShape"));
-    find_folder_elem.append_child(folder_shape_elem);
+    let folder_shape_elem = xot.create_element_ns(soap_doc.m_ns, "FolderShape");
+    xot.append(get_folder_elem, folder_shape_elem).unwrap();
 
-    let base_shape_elem = doc.create_text_element(types_name("BaseShape"), "IdOnly");
-    folder_shape_elem.append_child(base_shape_elem);
+    let base_shape_elem = xot.create_text_element_ns(soap_doc.t_ns, "BaseShape", "IdOnly");
+    xot.append(folder_shape_elem, base_shape_elem).unwrap();
 
-    let restriction_elem = doc.create_element(messages_name("Restriction"));
-    find_folder_elem.append_child(restriction_elem);
+    let parent_folder_ids_elem = xot.create_element_ns(soap_doc.m_ns, "FolderIds");
+    xot.append(get_folder_elem, parent_folder_ids_elem).unwrap();
 
-    let is_equal_to_elem = doc.create_element(messages_name("IsEqualTo"));
-    restriction_elem.append_child(is_equal_to_elem);
+    let dist_folder_id_elem = xot.create_element_ns(soap_doc.t_ns, "DistinguishedFolderId");
+    xot.set_attribute_value(dist_folder_id_elem, "Id", known_folder_id);
+    xot.append(parent_folder_ids_elem, dist_folder_id_elem).unwrap();
 
-    let field_uri_elem = doc.create_element(types_name("FieldURI"));
-    field_uri_elem.set_attribute_value("FieldURI", "folder:DisplayName");
-    is_equal_to_elem.append_child(field_uri_elem);
-
-    let field_uri_or_constant_elem = doc.create_element(types_name("FieldURIOrConstant"));
-    is_equal_to_elem.append_child(field_uri_or_constant_elem);
-
-    let constant_elem = doc.create_element(types_name("Constant"));
-    constant_elem.set_attribute_value("Value", name);
-    field_uri_or_constant_elem.append_child(constant_elem);
-
-    let parent_folder_ids_elem = doc.create_element(messages_name("ParentFolderIds"));
-    find_folder_elem.append_child(parent_folder_ids_elem);
-
-    let folder_id_elem = doc.create_element(messages_name("FolderId"));
-    base_folder_id.set_on_xml_element(&folder_id_elem);
-
-    pkg
+    (xot, soap_doc.document)
 }
 
 
-pub fn create_request_move_item(item_ids: &[IdAndChangeKey], dest_folder_id: &IdAndChangeKey) -> Package {
-    let pkg = create_soap_envelope();
-    let doc = pkg.as_document();
-    let body = get_soap_body(doc);
+pub fn create_request_find_folder(base_folder_id: &IdAndChangeKey, name: &str) -> (Xot, Node) {
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(false);
 
-    let move_item_elem = doc.create_element(messages_name("MoveItem"));
-    body.append_child(move_item_elem);
+    let find_folder_elem = xot.create_element_ns(soap_doc.m_ns, "FindFolder");
+    xot.set_attribute_value(find_folder_elem, "Traversal", "Deep");
+    xot.append(soap_doc.soap_body, find_folder_elem).unwrap();
 
-    let to_folder_id_elem = doc.create_element(messages_name("ToFolderId"));
-    move_item_elem.append_child(to_folder_id_elem);
+    let folder_shape_elem = xot.create_element_ns(soap_doc.m_ns, "FolderShape");
+    xot.append(find_folder_elem, folder_shape_elem).unwrap();
 
-    let folder_id_elem = doc.create_element(types_name("FolderId"));
-    dest_folder_id.set_on_xml_element(&folder_id_elem);
-    to_folder_id_elem.append_child(folder_id_elem);
+    let base_shape_elem = xot.create_text_element_ns(soap_doc.t_ns, "BaseShape", "IdOnly");
+    xot.append(folder_shape_elem, base_shape_elem).unwrap();
 
-    let item_ids_elem = doc.create_element(messages_name("ItemIds"));
-    move_item_elem.append_child(item_ids_elem);
+    let restriction_elem = xot.create_element_ns(soap_doc.m_ns, "Restriction");
+    xot.append(find_folder_elem, restriction_elem).unwrap();
+
+    let is_equal_to_elem = xot.create_element_ns(soap_doc.t_ns, "IsEqualTo");
+    xot.append(restriction_elem, is_equal_to_elem).unwrap();
+
+    let field_uri_elem = xot.create_element_ns(soap_doc.t_ns, "FieldURI");
+    xot.set_attribute_value(field_uri_elem, "FieldURI", "folder:DisplayName");
+    xot.append(is_equal_to_elem, field_uri_elem).unwrap();
+
+    let field_uri_or_constant_elem = xot.create_element_ns(soap_doc.t_ns, "FieldURIOrConstant");
+    xot.append(is_equal_to_elem, field_uri_or_constant_elem).unwrap();
+
+    let constant_elem = xot.create_element_ns(soap_doc.t_ns, "Constant");
+    xot.set_attribute_value(constant_elem, "Value", name);
+    xot.append(field_uri_or_constant_elem, constant_elem).unwrap();
+
+    let parent_folder_ids_elem = xot.create_element_ns(soap_doc.m_ns, "ParentFolderIds");
+    xot.append(find_folder_elem, parent_folder_ids_elem).unwrap();
+
+    let folder_id_elem = xot.create_element_ns(soap_doc.t_ns, "FolderId");
+    base_folder_id.set_on_xml_element(&mut xot, folder_id_elem);
+    xot.append(parent_folder_ids_elem, folder_id_elem).unwrap();
+
+    (xot, soap_doc.document)
+}
+
+
+pub fn create_request_move_item(item_ids: &[IdAndChangeKey], dest_folder_id: &IdAndChangeKey) -> (Xot, Node) {
+    let mut xot = Xot::new();
+    let soap_doc = xot.create_exchange_soap_doc(false);
+
+    let move_item_elem = xot.create_element_ns(soap_doc.m_ns, "MoveItem");
+    xot.append(soap_doc.soap_body, move_item_elem).unwrap();
+
+    let to_folder_id_elem = xot.create_element_ns(soap_doc.m_ns, "ToFolderId");
+    xot.append(move_item_elem, to_folder_id_elem).unwrap();
+
+    let folder_id_elem = xot.create_element_ns(soap_doc.t_ns, "FolderId");
+    dest_folder_id.set_on_xml_element(&mut xot, folder_id_elem);
+    xot.append(to_folder_id_elem, folder_id_elem).unwrap();
+
+    let item_ids_elem = xot.create_element_ns(soap_doc.m_ns, "ItemIds");
+    xot.append(move_item_elem, item_ids_elem).unwrap();
 
     for item_id in item_ids {
-        let item_id_elem = doc.create_element(types_name("ItemId"));
-        item_id.set_on_xml_element(&item_id_elem);
-        item_ids_elem.append_child(item_id_elem);
+        let item_id_elem = xot.create_element_ns(soap_doc.t_ns, "ItemId");
+        item_id.set_on_xml_element(&mut xot, item_id_elem);
+        xot.append(item_ids_elem, item_id_elem).unwrap();
     }
 
-    pkg
+    (xot, soap_doc.document)
+}
+
+pub fn extract_response_enumerate_sent_folder<'d>(xot: &mut Xot, doc: Node) -> (bool, Vec<SentItem>) {
+    let soap_ns = xot.namespace(SOAP_NS_URI).unwrap();
+    let t_ns = xot.namespace(EXCHANGE_TYPES_NS_URI).unwrap();
+    let m_ns = xot.namespace(EXCHANGE_MESSAGES_NS_URI).unwrap();
+
+    let envelope_n = xot.add_name_ns("Envelope", soap_ns);
+    let body_n = xot.add_name_ns("Body", soap_ns);
+    let fir_n = xot.add_name_ns("FindItemResponse", m_ns);
+    let resp_msgs_n = xot.add_name_ns("ResponseMessages", m_ns);
+    let firm_n = xot.add_name_ns("FindItemResponseMessage", m_ns);
+    let root_folder_n = xot.add_name_ns("RootFolder", m_ns);
+    let items_n = xot.add_name_ns("Items", t_ns);
+    let item_id_n = xot.add_name_ns("ItemId", t_ns);
+    let date_time_sent_n = xot.add_name_ns("DateTimeSent", t_ns);
+    let includes_last_n = xot.add_name("IncludesLastItemInRange");
+
+    let root_folder_elem = doc
+        .first_child_element_named(&xot, envelope_n)
+        .expect("no soap:Envelope child found")
+        .first_child_element_named(&xot, body_n)
+        .expect("no soap:Body child found")
+        .first_child_element_named(&xot, fir_n)
+        .expect("no m:FindItemResponse child found")
+        .first_child_element_named(&xot, resp_msgs_n)
+        .expect("no m:ResponseMessages child found")
+        .first_child_element_named(&xot, firm_n)
+        .expect("no m:FindItemResponseMessage child found")
+        .first_child_element_named(&xot, root_folder_n)
+        .expect("no m:RootFolder child found");
+    let is_last_str = xot.get_attribute(root_folder_elem, includes_last_n)
+        .expect("m:RootFolder is missing IncludesLastItemInRange attribute");
+    let is_last = match is_last_str {
+        "true" => true,
+        "false" => false,
+        other => panic!("unexpected value for IncludesLastItemInRange attribute in m:RootFolder: {}", other),
+    };
+
+    let items_elem = root_folder_elem
+        .first_child_element_named(&xot, items_n)
+        .expect("no t:Items child found");
+
+    let items_children: Vec<Node> = items_elem
+        .children(&xot).into_iter()
+        .filter(|c| xot.is_element(*c))
+        .collect();
+    let mut sent_items = Vec::new();
+    for item in items_children {
+        let id_elem = item
+            .first_child_element_named(&xot, item_id_n)
+            .expect("t:Items child without t:ItemId element");
+        let item_id = IdAndChangeKey::from_xml_element(xot, id_elem)
+            .expect("t:Items child without t:ItemId values");
+        let sent_timestamp_string = item
+            .first_child_element_named(&xot, date_time_sent_n)
+            .expect("t:Items child without t:DateTimeSent element")
+            .child_text(&xot).expect("Items child t:DateTimeSent does not only contain text children");
+        let sent_timestamp = NaiveDateTime::parse_from_str(&sent_timestamp_string, EXCHANGE_TIMESTAMP_FORMAT)
+            .expect("failed to parse Exchange timestamp")
+            .and_utc();
+        sent_items.push(SentItem {
+            id: item_id,
+            sent: sent_timestamp,
+        });
+    }
+
+    (is_last, sent_items)
+}
+
+pub fn extract_response_get_folder(xot: &mut Xot, doc: Node) -> Option<IdAndChangeKey> {
+    let soap_ns = xot.namespace(SOAP_NS_URI).unwrap();
+    let t_ns = xot.namespace(EXCHANGE_TYPES_NS_URI).unwrap();
+    let m_ns = xot.namespace(EXCHANGE_MESSAGES_NS_URI).unwrap();
+
+    let envelope_n = xot.add_name_ns("Envelope", soap_ns);
+    let body_n = xot.add_name_ns("Body", soap_ns);
+    let gfr_n = xot.add_name_ns("GetFolderResponse", m_ns);
+    let resp_msgs_n = xot.add_name_ns("ResponseMessages", m_ns);
+    let gfrm_n = xot.add_name_ns("GetFolderResponseMessage", m_ns);
+    let folders_n = xot.add_name_ns("Folders", m_ns);
+    let folder_id_n = xot.add_name_ns("FolderId", t_ns);
+
+    let folders_elem = doc
+        .first_child_element_named(&xot, envelope_n)
+        .expect("no soap:Envelope child found")
+        .first_child_element_named(&xot, body_n)
+        .expect("no soap:Body child found")
+        .first_child_element_named(&xot, gfr_n)
+        .expect("no m:GetFolderResponse child found")
+        .first_child_element_named(&xot, resp_msgs_n)
+        .expect("no m:ResponseMessages child found")
+        .first_child_element_named(&xot, gfrm_n)
+        .expect("no m:GetFolderResponseMessage child found")
+        .first_child_element_named(&xot, folders_n)
+        .expect("no m:Folders child found");
+
+    let folders_children: Vec<Node> = folders_elem
+        .children(&xot).into_iter()
+        .filter(|c| xot.is_element(*c))
+        .collect();
+    for folder in folders_children {
+        let id_elem = folder
+            .first_child_element_named(&xot, folder_id_n)
+            .expect("m:Folders child without t:FolderId element");
+        let folder_id = IdAndChangeKey::from_xml_element(xot, id_elem)
+            .expect("Folders child without FolderId values");
+        return Some(folder_id);
+    }
+
+    None
+}
+
+pub fn extract_response_find_folder<'d>(xot: &mut Xot, doc: Node) -> Option<IdAndChangeKey> {
+    let soap_ns = xot.namespace(SOAP_NS_URI).unwrap();
+    let t_ns = xot.namespace(EXCHANGE_TYPES_NS_URI).unwrap();
+    let m_ns = xot.namespace(EXCHANGE_MESSAGES_NS_URI).unwrap();
+
+    let envelope_n = xot.add_name_ns("Envelope", soap_ns);
+    let body_n = xot.add_name_ns("Body", soap_ns);
+    let ffr_n = xot.add_name_ns("FindFolderResponse", m_ns);
+    let resp_msgs_n = xot.add_name_ns("ResponseMessages", m_ns);
+    let ffrm_n = xot.add_name_ns("FindFolderResponseMessage", m_ns);
+    let root_folder_n = xot.add_name_ns("RootFolder", m_ns);
+    let folders_n = xot.add_name_ns("Folders", t_ns);
+    let folder_id_n = xot.add_name_ns("FolderId", t_ns);
+
+    let folders_elem = doc
+        .first_child_element_named(&xot, envelope_n)
+        .expect("no soap:Envelope child found")
+        .first_child_element_named(&xot, body_n)
+        .expect("no soap:Body child found")
+        .first_child_element_named(&xot, ffr_n)
+        .expect("no m:FindFolderResponse child found")
+        .first_child_element_named(&xot, resp_msgs_n)
+        .expect("no m:ResponseMessages child found")
+        .first_child_element_named(&xot, ffrm_n)
+        .expect("no m:FindFolderResponseMessage child found")
+        .first_child_element_named(&xot, root_folder_n)
+        .expect("no m:RootFolder child found")
+        .first_child_element_named(&xot, folders_n)
+        .expect("no t:Folders child found");
+
+    let folders_children: Vec<Node> = folders_elem
+        .children(&xot).into_iter()
+        .filter(|c| xot.is_element(*c))
+        .collect();
+    for folder in folders_children {
+        let id_elem = folder
+            .first_child_element_named(&xot, folder_id_n)
+            .expect("t:Folders child without t:FolderId element");
+        let folder_id = IdAndChangeKey::from_xml_element(xot, id_elem)
+            .expect("t:Folders child without t:FolderId values");
+        return Some(folder_id);
+    }
+
+    None
 }
